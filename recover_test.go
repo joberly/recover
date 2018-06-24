@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"testing"
+	"time"
 )
 
 type testHandler interface {
@@ -20,9 +22,13 @@ func TestRecoverMux(t *testing.T) {
 	path := "/test"
 	url := "http://localhost" + addr + path
 
-	// Test table
+	// Test table of handlers
 	ths := []testHandler{
-		newTestHandlerOK("handler OK"),
+		newTestHandlerOK("good path"),
+		newTestHandlerPanic("panic message"),
+		newTestHandlerWithCode(201, http.StatusText(201)),
+		newTestHandlerWithCode(1, "Something went wrong."),
+		newTestHandlerWithCode(1000, "Something went wrong."),
 	}
 
 	// Run each test in the table
@@ -74,7 +80,7 @@ type testHandlerOK struct {
 	resp string
 }
 
-func newTestHandlerOK(resp string) testHandler {
+func newTestHandlerOK(resp string) *testHandlerOK {
 	return &testHandlerOK{
 		resp: resp,
 	}
@@ -89,5 +95,62 @@ func (h *testHandlerOK) response() []byte {
 }
 
 func (h *testHandlerOK) desc() string {
-	return h.resp
+	return "testHandlerOK (" + h.resp + ")"
+}
+
+// TestHandlerPanic panics in its handler after trying to write response data
+// to the http.ResponseWriter.
+type testHandlerPanic struct {
+	msg string // panic message
+	rng *rand.Rand
+}
+
+func newTestHandlerPanic(msg string) *testHandlerPanic {
+	return &testHandlerPanic{
+		msg: msg,
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+// Handle attempts to send a response but then panics. Attempted message
+// contains a random number to try to make it different for each test
+// so it can't be accidentally anticipated.
+func (h *testHandlerPanic) Handle(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "this should never be received %d", h.rng.Uint64())
+	panic(h.msg)
+}
+
+func (h *testHandlerPanic) response() []byte {
+	return []byte("Something went wrong.")
+}
+
+func (h *testHandlerPanic) desc() string {
+	return "testHandlerPanic (" + h.msg + ")"
+}
+
+// TestHandlerWithCode changes the status code but the handler itself completes
+// without explicitly panicking.
+type testHandlerWithCode struct {
+	sc   int
+	resp string
+}
+
+func newTestHandlerWithCode(statusCode int, resp string) *testHandlerWithCode {
+	return &testHandlerWithCode{
+		sc:   statusCode,
+		resp: resp,
+	}
+}
+
+func (h *testHandlerWithCode) Handle(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(h.sc) // note this may panic if status code is out of bounds
+	fmt.Fprintf(w, h.resp)
+}
+
+func (h *testHandlerWithCode) response() []byte {
+	return []byte(h.resp)
+}
+
+func (h *testHandlerWithCode) desc() string {
+	return fmt.Sprintf("testHandlerWithCode (%d %s)", h.sc, h.resp)
 }
