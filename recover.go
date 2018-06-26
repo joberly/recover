@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"runtime"
 )
 
 // A recoverMux recovers from panics during an http.Handler, sending an error
 // response to a client in the event a panic occurs.
 type recoverMux struct {
 	mux *http.ServeMux
+
+	DumpStack bool // set to true to dump the stack to the client on a panic
 }
 
 // NewRecoverMux returns a new recoverMux, creating and wrapping a new
@@ -28,7 +31,7 @@ func (rmux *recoverMux) HandleFunc(pattern string, handler func(http.ResponseWri
 	f := func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if x := recover(); x != nil {
-				recoverHandler(w, r)
+				rmux.recoverHandler(w, r)
 			}
 		}()
 		rw := newResponseWriter(w)
@@ -47,8 +50,15 @@ func (rmux *recoverMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // RecoverHandler is the handler invoked when the client's handler panics.
-func recoverHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Something went wrong.")
+func (rmux *recoverMux) recoverHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Something went wrong.\n")
+
+	if rmux.DumpStack {
+		var s [4096]byte
+		n := runtime.Stack(s[:], false)
+		fmt.Fprintf(w, "\n")
+		w.Write(s[:n])
+	}
 }
 
 // A responseWriter wraps http.ResponseWriter for a recoverMux.

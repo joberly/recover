@@ -1,21 +1,23 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
 
 type testHandler interface {
 	Handle(http.ResponseWriter, *http.Request)
-	response() []byte
+	response() string
 	desc() string
 }
 
+// TestRecoverMux tests the default, production-like behavior of the
+// recoverMux. Ensures normal and panicking client handlers work as expected.
 func TestRecoverMux(t *testing.T) {
 	// Some server URL stuff
 	addr := ":5050"
@@ -52,27 +54,175 @@ func TestRecoverMux(t *testing.T) {
 		// Ensure normal response
 		if err != nil {
 			t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
-		} else {
-			// Read response body
-			var bresp []byte
-			bresp, err = ioutil.ReadAll(resp.Body)
-			if err != nil {
-				t.Errorf("test error: %s read response error %s", th.desc(), err.Error())
-			}
-
-			// Check response body equals expected value
-			if !bytes.Equal(th.response(), bresp) {
-				t.Errorf("test error: %s response not equal to expected response", th.desc())
-			}
-
-			resp.Body.Close()
+			continue
 		}
+
+		// Read response body
+		sc := bufio.NewScanner(resp.Body)
+		b := sc.Scan()
+		if !b {
+			err = sc.Err()
+			if err != nil {
+				t.Errorf("test error: %s read response error %s", th.desc(),
+					sc.Err().Error())
+			} else {
+				t.Errorf("test error: %s unexpected EOF", th.desc())
+			}
+		} else {
+			// Check response body equals expected value
+			ln := sc.Text()
+			if ln != th.response() {
+				t.Errorf("test error: %s response mismatch actual \"%s\" expected \"%s\"",
+					th.desc(), ln, th.response())
+			}
+		}
+
+		resp.Body.Close()
 
 		// Close server
 		err = s.Close()
 		if err != nil {
 			t.Errorf("test error: %s close error %s", th.desc(), err.Error())
 		}
+	}
+}
+
+// TestDebugOKRecoverMux tests behavior of the recoverMux with the DumpStack
+// flag set to true for a normal client handler.
+func TestDebugOKRecoverMux(t *testing.T) {
+	// Some server URL stuff
+	addr := ":5050"
+	path := "/test"
+	url := "http://localhost" + addr + path
+
+	// Test normal handler
+	th := newTestHandlerOK("good path")
+	mux := newRecoverMux()
+	mux.DumpStack = true
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		th.Handle(w, r)
+	})
+	s := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	go s.ListenAndServe()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
+		return
+	}
+
+	// Read response body
+	sc := bufio.NewScanner(resp.Body)
+	b := sc.Scan()
+	if !b {
+		err = sc.Err()
+		if err != nil {
+			t.Errorf("test error: %s read response error %s", th.desc(),
+				sc.Err().Error())
+		} else {
+			t.Errorf("test error: %s unexpected EOF", th.desc())
+		}
+	} else {
+		ln := sc.Text()
+		// Check response body equals expected value
+		if ln != th.response() {
+			t.Errorf("test error: %s response not equal to expected response", th.desc())
+		}
+	}
+
+	resp.Body.Close()
+
+	err = s.Close()
+	if err != nil {
+		t.Errorf("test error: %s close error %s", th.desc(), err.Error())
+	}
+}
+
+// TestDebugPanicRecoverMux tests behavior of the recoverMux with the DumpStack
+// flag set to true for a panicking client handler.
+func TestDebugPanicRecoverMux(t *testing.T) {
+	// Some server URL stuff
+	addr := ":5050"
+	path := "/test"
+	url := "http://localhost" + addr + path
+
+	// Test normal handler
+	th := newTestHandlerPanic("panicking with stack")
+	mux := newRecoverMux()
+	mux.DumpStack = true
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		th.Handle(w, r)
+	})
+	s := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	go s.ListenAndServe()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
+		return
+	}
+
+	// Validate parts of response body
+	sc := bufio.NewScanner(resp.Body)
+
+	// Check initial message
+	b := sc.Scan()
+	if !b {
+		err = sc.Err()
+		if err != nil {
+			t.Errorf("test error: %s read response error %s", th.desc(),
+				sc.Err().Error())
+		} else {
+			t.Errorf("test error: %s unexpected EOF", th.desc())
+		}
+	} else {
+		ln := sc.Text()
+		if ln != string(th.response()) {
+			t.Errorf("test error: %s initial string mismatch: \"%s\"\n", th.desc(), ln)
+		}
+
+		// Skip a line
+		sc.Scan()
+
+		exps := []string{
+			"goroutine",
+			"recoverHandler",
+			"",
+			"func1",
+			"",
+			"panic",
+			"",
+			"Handle",
+		}
+
+		for _, lnexp := range exps {
+			// Scan the line with the function name and check it
+			b = sc.Scan()
+			if b {
+				ln = sc.Text()
+				if !strings.Contains(ln, lnexp) {
+					t.Errorf("test error: %s stack line mismatch, actual \"%s\" exp \"%s\"",
+						th.desc(), ln, lnexp)
+				}
+			} else {
+				t.Errorf("test error: %s unexpected EOF", th.desc())
+				break
+			}
+		}
+	}
+
+	resp.Body.Close()
+
+	// Close server
+	err = s.Close()
+	if err != nil {
+		t.Errorf("test error: %s close error %s", th.desc(), err.Error())
 	}
 }
 
@@ -90,8 +240,8 @@ func (h *testHandlerOK) Handle(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, h.resp)
 }
 
-func (h *testHandlerOK) response() []byte {
-	return []byte(h.resp)
+func (h *testHandlerOK) response() string {
+	return h.resp
 }
 
 func (h *testHandlerOK) desc() string {
@@ -120,8 +270,8 @@ func (h *testHandlerPanic) Handle(w http.ResponseWriter, r *http.Request) {
 	panic(h.msg)
 }
 
-func (h *testHandlerPanic) response() []byte {
-	return []byte("Something went wrong.")
+func (h *testHandlerPanic) response() string {
+	return "Something went wrong."
 }
 
 func (h *testHandlerPanic) desc() string {
@@ -147,8 +297,8 @@ func (h *testHandlerWithCode) Handle(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, h.resp)
 }
 
-func (h *testHandlerWithCode) response() []byte {
-	return []byte(h.resp)
+func (h *testHandlerWithCode) response() string {
+	return h.resp
 }
 
 func (h *testHandlerWithCode) desc() string {
