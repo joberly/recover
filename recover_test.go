@@ -36,54 +36,55 @@ func TestRecoverMux(t *testing.T) {
 	// Run each test in the table
 	for _, th := range ths {
 		// Create recoverMux under test
-		mux := newRecoverMux()
-		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			th.Handle(w, r)
-		})
-		s := &http.Server{
-			Addr:    addr,
-			Handler: mux,
-		}
+		t.Run(fmt.Sprintf("TestRecoverMux %s", th.desc()), func(t *testing.T) {
+			mux := NewRecoverMux()
+			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+				th.Handle(w, r)
+			})
+			s := &http.Server{
+				Addr:    addr,
+				Handler: mux,
+			}
 
-		// Start server
-		go s.ListenAndServe()
+			// Start server
+			go s.ListenAndServe()
 
-		// Get response from server
-		resp, err := http.Get(url)
+			// Get response from server
+			resp, err := http.Get(url)
 
-		// Ensure normal response
-		if err != nil {
-			t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
-			continue
-		}
-
-		// Read response body
-		sc := bufio.NewScanner(resp.Body)
-		b := sc.Scan()
-		if !b {
-			err = sc.Err()
+			// Ensure normal response
 			if err != nil {
-				t.Errorf("test error: %s read response error %s", th.desc(),
-					sc.Err().Error())
+				t.Errorf("HTTP GET error %s\n", err.Error())
+				return
+			}
+
+			// Read response body
+			sc := bufio.NewScanner(resp.Body)
+			b := sc.Scan()
+			if !b {
+				err = sc.Err()
+				if err != nil {
+					t.Errorf("read response error %s", sc.Err().Error())
+				} else {
+					t.Errorf("unexpected EOF")
+				}
 			} else {
-				t.Errorf("test error: %s unexpected EOF", th.desc())
+				// Check response body equals expected value
+				ln := sc.Text()
+				if ln != th.response() {
+					t.Errorf("response mismatch actual \"%s\" expected \"%s\"",
+						ln, th.response())
+				}
 			}
-		} else {
-			// Check response body equals expected value
-			ln := sc.Text()
-			if ln != th.response() {
-				t.Errorf("test error: %s response mismatch actual \"%s\" expected \"%s\"",
-					th.desc(), ln, th.response())
+
+			resp.Body.Close()
+
+			// Close server
+			err = s.Close()
+			if err != nil {
+				t.Errorf("server close error %s", err.Error())
 			}
-		}
-
-		resp.Body.Close()
-
-		// Close server
-		err = s.Close()
-		if err != nil {
-			t.Errorf("test error: %s close error %s", th.desc(), err.Error())
-		}
+		})
 	}
 }
 
@@ -97,7 +98,7 @@ func TestDebugOKRecoverMux(t *testing.T) {
 
 	// Test normal handler
 	th := newTestHandlerOK("good path")
-	mux := newRecoverMux()
+	mux := NewRecoverMux()
 	mux.DumpStack = true
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		th.Handle(w, r)
@@ -110,7 +111,7 @@ func TestDebugOKRecoverMux(t *testing.T) {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
+		t.Errorf("HTTP GET error %s\n", err.Error())
 		return
 	}
 
@@ -120,16 +121,15 @@ func TestDebugOKRecoverMux(t *testing.T) {
 	if !b {
 		err = sc.Err()
 		if err != nil {
-			t.Errorf("test error: %s read response error %s", th.desc(),
-				sc.Err().Error())
+			t.Errorf("read response error %s", sc.Err().Error())
 		} else {
-			t.Errorf("test error: %s unexpected EOF", th.desc())
+			t.Errorf("unexpected EOF")
 		}
 	} else {
 		ln := sc.Text()
 		// Check response body equals expected value
 		if ln != th.response() {
-			t.Errorf("test error: %s response not equal to expected response", th.desc())
+			t.Errorf("response not equal to expected response")
 		}
 	}
 
@@ -137,7 +137,7 @@ func TestDebugOKRecoverMux(t *testing.T) {
 
 	err = s.Close()
 	if err != nil {
-		t.Errorf("test error: %s close error %s", th.desc(), err.Error())
+		t.Errorf("server close error %s", err.Error())
 	}
 }
 
@@ -151,7 +151,7 @@ func TestDebugPanicRecoverMux(t *testing.T) {
 
 	// Test normal handler
 	th := newTestHandlerPanic("panicking with stack")
-	mux := newRecoverMux()
+	mux := NewRecoverMux()
 	mux.DumpStack = true
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		th.Handle(w, r)
@@ -164,7 +164,7 @@ func TestDebugPanicRecoverMux(t *testing.T) {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		t.Errorf("test error: %s HTTP GET error %s\n", th.desc(), err.Error())
+		t.Errorf("HTTP GET error %s\n", err.Error())
 		return
 	}
 
@@ -176,15 +176,14 @@ func TestDebugPanicRecoverMux(t *testing.T) {
 	if !b {
 		err = sc.Err()
 		if err != nil {
-			t.Errorf("test error: %s read response error %s", th.desc(),
-				sc.Err().Error())
+			t.Errorf("read response error %s", sc.Err().Error())
 		} else {
-			t.Errorf("test error: %s unexpected EOF", th.desc())
+			t.Errorf("unexpected EOF")
 		}
 	} else {
 		ln := sc.Text()
 		if ln != string(th.response()) {
-			t.Errorf("test error: %s initial string mismatch: \"%s\"\n", th.desc(), ln)
+			t.Errorf("initial string mismatch: \"%s\"\n", ln)
 		}
 
 		// Skip a line
@@ -192,6 +191,8 @@ func TestDebugPanicRecoverMux(t *testing.T) {
 
 		exps := []string{
 			"goroutine",
+			"Stack",
+			"",
 			"recoverHandler",
 			"",
 			"func1",
@@ -207,11 +208,11 @@ func TestDebugPanicRecoverMux(t *testing.T) {
 			if b {
 				ln = sc.Text()
 				if !strings.Contains(ln, lnexp) {
-					t.Errorf("test error: %s stack line mismatch, actual \"%s\" exp \"%s\"",
-						th.desc(), ln, lnexp)
+					t.Errorf("stack line mismatch, actual \"%s\" exp \"%s\"",
+						ln, lnexp)
 				}
 			} else {
-				t.Errorf("test error: %s unexpected EOF", th.desc())
+				t.Errorf("unexpected EOF")
 				break
 			}
 		}

@@ -5,21 +5,21 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"runtime"
+	"runtime/debug"
 )
 
-// A recoverMux recovers from panics during an http.Handler, sending an error
+// A RecoverMux recovers from panics during an http.Handler, sending an error
 // response to a client in the event a panic occurs.
-type recoverMux struct {
+type RecoverMux struct {
 	mux *http.ServeMux
 
 	DumpStack bool // set to true to dump the stack to the client on a panic
 }
 
-// NewRecoverMux returns a new recoverMux, creating and wrapping a new
+// NewRecoverMux returns a new RecoverMux, creating and wrapping a new
 // http.ServeMux.
-func newRecoverMux() *recoverMux {
-	return &recoverMux{
+func NewRecoverMux() *RecoverMux {
+	return &RecoverMux{
 		mux: http.NewServeMux(),
 	}
 }
@@ -27,7 +27,7 @@ func newRecoverMux() *recoverMux {
 // HandleFunc wraps the caller's handler with a recovery handler which recovers
 // from panics in the caller's handler. Response data is only written if the
 // caller's handler completes without panicking.
-func (rmux *recoverMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+func (rmux *RecoverMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	f := func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if x := recover(); x != nil {
@@ -45,19 +45,18 @@ func (rmux *recoverMux) HandleFunc(pattern string, handler func(http.ResponseWri
 }
 
 // ServeHTTP uses the wrapped http.ServeMux to serve recoverable handlers.
-func (rmux *recoverMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (rmux *RecoverMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rmux.mux.ServeHTTP(w, r)
 }
 
 // RecoverHandler is the handler invoked when the client's handler panics.
-func (rmux *recoverMux) recoverHandler(w http.ResponseWriter, r *http.Request) {
+func (rmux *RecoverMux) recoverHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Something went wrong.\n")
 
 	if rmux.DumpStack {
-		var s [4096]byte
-		n := runtime.Stack(s[:], false)
+		s := debug.Stack()
 		fmt.Fprintf(w, "\n")
-		w.Write(s[:n])
+		w.Write(s)
 	}
 }
 
