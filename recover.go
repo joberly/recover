@@ -34,6 +34,8 @@ func (rmux *RecoverMux) HandleFunc(pattern string, handler func(http.ResponseWri
 				rmux.recoverHandler(w, r)
 			}
 		}()
+		// Use a responseWriter to buffer the user's handler's response
+		// so it can be thrown away in the event of a panic.
 		rw := newResponseWriter(w)
 		handler(rw, r)
 		err := rw.complete()
